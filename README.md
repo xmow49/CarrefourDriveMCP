@@ -242,6 +242,12 @@ quantities, EANs, statuses, dates and action links are kept), and a footer gives
 the before/after size. Pass `raw_response: true` to any tool for the untouched
 payload, or set `CARREFOUR_COMPACT=0` to turn this off globally.
 
+`get_cart` goes further and returns a short text summary: totals, savings,
+amount missing to the minimum order, pickup slot (Paris time), and one line per
+item with quantity, title, EAN, price paid, discounts, active promotion and
+availability. A real seven-item cart drops from ~98k to ~1.4k characters, so no
+line is cut off by `CARREFOUR_MAX_RESPONSE_CHARS`.
+
 ## Tool reference
 
 ### Search & catalogue *(no account needed)*

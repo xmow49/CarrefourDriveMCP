@@ -6,6 +6,7 @@ import type { ToolSpec } from './types.js';
 import { loadToolSpecs, type LoadResult } from './loader.js';
 import { annotationsFor, isExposed, metaFor, selectToolsets, type ToolsetSelection } from './catalog.js';
 import { compact, compactEnabled } from './compact.js';
+import { summarize } from './summaries.js';
 import { httpService } from '../services/http.service.js';
 import { sessionService, NO_SESSION_MESSAGE } from '../services/session.service.js';
 import { logger } from '../utils/logger.js';
@@ -35,12 +36,17 @@ function truncate(out: string): string {
 }
 
 /**
- * Render a successful payload. In compact mode, decorative fields are dropped
- * and a one-line footer says how to get the full payload back.
+ * Render a successful payload. In compact mode, a tool with a dedicated summary
+ * (see summaries.ts) returns that; otherwise decorative fields are dropped. A
+ * one-line footer says how to get the full payload back.
  */
-export function render(data: unknown, raw: boolean): string {
+export function render(data: unknown, raw: boolean, tool?: string): string {
   if (raw || !compactEnabled() || typeof data === 'string') return truncate(stringify(data));
   const full = stringify(data);
+  const summary = tool ? summarize(tool, data) : null;
+  if (summary) {
+    return `${truncate(summary)}\n\n[summary view: ${summary.length} of ${full.length} chars; call again with ${RAW_RESPONSE_PARAM}: true for the full payload]`;
+  }
   const small = stringify(compact(data));
   if (small.length >= full.length) return truncate(full);
   return `${truncate(small)}\n\n[compact view: ${small.length} of ${full.length} chars — images, tracking and empty fields removed; call again with ${RAW_RESPONSE_PARAM}: true for the full payload]`;
@@ -110,7 +116,7 @@ export async function executeSpecData(
       };
     }
 
-    return { ok: true, status: result.status, data: result.data, result: text(render(result.data, opts.raw === true)) };
+    return { ok: true, status: result.status, data: result.data, result: text(render(result.data, opts.raw === true, spec.name)) };
   } catch (error) {
     logger.error('Tool execution failed', { tool: spec.name, error: String(error) });
     return { ok: false, result: text(`Request failed for "${spec.name}": ${(error as Error).message}`, true) };

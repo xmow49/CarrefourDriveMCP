@@ -1,6 +1,6 @@
 {
   "name": "get_cart",
-  "description": "Retrieves the current shopping cart contents and summary for the authenticated user on Carrefour France. Returns cart totals (amounts, discounts, loyalty points, delivery fees), marketplace sub-baskets, additional orders, preorders, and relevant API endpoints. Optionally forces a refresh of cart data.",
+  "description": "Retrieves the current shopping cart of the authenticated user on Carrefour France. By default returns a short summary: totals, savings, amount missing to reach the minimum order, pickup slot, and every line with quantity, title, EAN, price paid, discounts, active promotion and availability. Pass raw_response: true for the full Carrefour payload (marketplace sub-baskets, preorders, product sheets). Optionally forces a refresh of cart data.",
   "parameters": {
     "type": "object",
     "properties": {
