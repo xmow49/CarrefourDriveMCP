@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PasteBuffer, assess, selectCookies, shouldAlert } from '../cli.js';
-import type { KeepAliveState } from '../services/keepalive.service.js';
+import { classifyProbe, type KeepAliveState } from '../services/keepalive.service.js';
 
 const NOW = Date.parse('2026-11-04T12:00:00Z');
 const future = NOW / 1000 + 3600;
@@ -24,7 +24,7 @@ test('selectCookies keeps the store and SSO session cookies only', () => {
     kept.map((c) => `${c.name}@${c.domain}`).sort(),
     [
       'FRO_SESSION_ID@www.carrefour.fr',
-      'FRO_STORE@carrefour.fr',
+      'FRO_STORE@.carrefour.fr',
       'amlbcookie@moncompte.carrefour.fr',
       'c4iamsecuretk@moncompte.carrefour.fr',
     ]
@@ -98,12 +98,23 @@ test('assess: a missing or old record means the server is not keeping the sessio
   assert.equal(assess(state({ lastCheck: 'garbage' }), NOW).verdict, 'stale');
 });
 
-test('shouldAlert: one alert per episode, but an expiry always gets through', () => {
+test('shouldAlert: one alert per episode; expiry and a stopped keep-alive always get through', () => {
   assert.equal(shouldAlert('ok', 'expired'), false);
   assert.equal(shouldAlert('expired', null), true);
   assert.equal(shouldAlert('expired', 'error'), true);
   assert.equal(shouldAlert('expired', 'expired'), false);
   assert.equal(shouldAlert('error', null), true);
   assert.equal(shouldAlert('error', 'error'), false);
-  assert.equal(shouldAlert('stale', 'expired'), false);
+  assert.equal(shouldAlert('error', 'expired'), false);
+  assert.equal(shouldAlert('stale', 'expired'), true);
+  assert.equal(shouldAlert('stale', 'error'), true);
+  assert.equal(shouldAlert('stale', 'stale'), false);
+});
+
+test('classifyProbe: a Cloudflare 403 is not an expired session', () => {
+  assert.equal(classifyProbe(200, 'application/json').outcome, 'ok');
+  assert.equal(classifyProbe(401, 'application/json').outcome, 'expired');
+  assert.equal(classifyProbe(403, 'application/json; charset=utf-8').outcome, 'expired');
+  assert.equal(classifyProbe(403, 'text/html').outcome, 'error');
+  assert.equal(classifyProbe(500, null).outcome, 'error');
 });

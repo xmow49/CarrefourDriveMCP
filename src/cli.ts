@@ -24,7 +24,7 @@ import {
   type CookieInput,
 } from './services/session.service.js';
 import { keepAliveTick, readState, type KeepAliveState } from './services/keepalive.service.js';
-import { browserService } from './services/browser.service.js';
+import { browserService, profileDir } from './services/browser.service.js';
 import { dataPath } from './utils/paths.js';
 
 const WWW_HOST = new URL(CARREFOUR_ORIGIN).host;
@@ -69,7 +69,7 @@ export function selectCookies(batches: CookieInput[][], now = Date.now()): Selec
         expired.push(c.name);
         continue;
       }
-      const cookie = { ...c, domain: host, path: c.path || '/' };
+      const cookie = { ...c, domain: c.domain || host, path: c.path || '/' };
       kept.set(`${c.name}|${host}|${cookie.path}`, cookie);
     }
   }
@@ -247,9 +247,13 @@ async function importCookies(args: string[]): Promise<number> {
   console.log('Checking with carrefour.fr...');
   let state: KeepAliveState;
   try {
-    state = await keepAliveTick();
+    state = await keepAliveTick(sessionService, { record: false });
   } finally {
     await browserService.shutdown();
+    if (files.length > 0 && !keepFiles) {
+      for (const f of files) unlinkSync(resolve(f));
+      console.log('Export files deleted (they hold the session).');
+    }
   }
   const ok = state.outcome === 'ok';
   console.log(
@@ -259,10 +263,6 @@ async function importCookies(args: string[]): Promise<number> {
           '  Check the browser is signed in to the account, then export the cookies again.'
   );
 
-  if (files.length > 0 && !keepFiles) {
-    for (const f of files) unlinkSync(resolve(f));
-    console.log('Export files deleted (they hold the session).');
-  }
   if (ok) console.log('Running servers use the new cookies from their next request, no restart needed.');
   return ok ? 0 : 1;
 }
@@ -303,13 +303,13 @@ export function assess(
 }
 
 /**
- * One alert per episode: an expiry is always reported once, even after an
- * error alert; errors and staleness only when nothing was reported yet.
+ * One alert per episode: an expiry and a stopped keep-alive are each reported
+ * once, whatever came before; a failing check only when nothing was reported.
  */
 export function shouldAlert(verdict: Verdict, alerted: string | null): boolean {
   if (verdict === 'ok') return false;
-  if (verdict === 'expired') return alerted !== 'expired';
-  return alerted === null;
+  if (verdict === 'error') return alerted === null;
+  return alerted !== verdict;
 }
 
 function alertFile(): string {
@@ -324,7 +324,7 @@ async function checkSession(args: string[]): Promise<number> {
   let state: KeepAliveState | null;
   if (args.includes('--probe')) {
     try {
-      state = await keepAliveTick();
+      state = await keepAliveTick(sessionService, { record: false });
     } finally {
       await browserService.shutdown();
     }
@@ -346,7 +346,7 @@ async function checkSession(args: string[]): Promise<number> {
     // No alert sent yet.
   }
   if (shouldAlert(verdict, alerted)) console.log(message);
-  const next = verdict === 'ok' ? null : verdict === 'expired' ? 'expired' : (alerted ?? 'error');
+  const next = verdict === 'ok' ? null : verdict === 'error' ? (alerted ?? 'error') : verdict;
   writeFileSync(alertFile(), JSON.stringify({ alerted: next, at: new Date().toISOString() }));
   return code;
 }
@@ -362,7 +362,11 @@ const COMMANDS: Record<string, (args: string[]) => Promise<number>> = {
 export async function runCli(argv: string[]): Promise<number | null> {
   const command = COMMANDS[argv[0]];
   if (!command) return null;
-  // Never open the profile a running server holds: Chromium allows one instance per profile.
-  process.env.CARREFOUR_BROWSER_PROFILE ??= dataPath('browser-profile-cli');
+  // Never touch what a running server holds: its Chromium profile (one
+  // instance per profile), its shared browser, or cookies from its env.
+  process.env.CARREFOUR_BROWSER_PROFILE = `${profileDir()}-cli`;
+  delete process.env.CARREFOUR_SHARED_BROWSER;
+  delete process.env.CARREFOUR_COOKIES;
+  delete process.env.CARREFOUR_COOKIE_FILE;
   return command(argv.slice(1));
 }

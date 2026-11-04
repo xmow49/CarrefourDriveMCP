@@ -117,6 +117,18 @@ export interface FetchResponse {
   text: string;
 }
 
+/**
+ * Give the browser the jar's cookies. Same-named cookies are cleared first: a
+ * stale copy under another domain form (host-only vs `.domain`) would
+ * otherwise still be sent next to the fresh one.
+ */
+async function seedCookies(context: BrowserContext): Promise<void> {
+  const seeded = sessionService.toPlaywrightCookies();
+  if (seeded.length === 0) return;
+  for (const name of new Set(seeded.map((c) => c.name))) await context.clearCookies({ name });
+  await context.addCookies(seeded);
+}
+
 class BrowserService {
   private context: BrowserContext | null = null;
   private headed = false;
@@ -192,12 +204,9 @@ class BrowserService {
     // written to disk): give it back the ones we kept. Same profile, same
     // device, so Carrefour accepts them, unlike a copy into another browser.
     if (started) {
-      const seeded = sessionService.toPlaywrightCookies();
-      if (seeded.length > 0) {
-        await context.addCookies(seeded).catch((error) => {
-          logger.error('Could not seed the shared browser with the stored cookies', { error: String(error) });
-        });
-      }
+      await seedCookies(context).catch((error) => {
+        logger.error('Could not seed the shared browser with the stored cookies', { error: String(error) });
+      });
     }
 
     this.headed = true;
@@ -228,12 +237,9 @@ class BrowserService {
     context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
 
     // Seed the profile with anything the user imported by hand or via the env.
-    const seeded = sessionService.toPlaywrightCookies();
-    if (seeded.length > 0) {
-      await context.addCookies(seeded).catch((error) => {
-        logger.error('Could not seed the browser with the stored cookies', { error: String(error) });
-      });
-    }
+    await seedCookies(context).catch((error) => {
+      logger.error('Could not seed the browser with the stored cookies', { error: String(error) });
+    });
 
     this.headed = headless === false;
     logger.info('Browser started', { headless, profile: dir });
@@ -311,10 +317,8 @@ class BrowserService {
     const generation = sessionService.jarGeneration();
     if (generation === this.seededGeneration) return;
     this.seededGeneration = generation;
-    const seeded = sessionService.toPlaywrightCookies();
-    if (seeded.length === 0) return;
     const context = await this.ensureContext();
-    await context.addCookies(seeded).catch((error) => {
+    await seedCookies(context).catch((error) => {
       logger.error('Could not hand the reloaded cookies to the browser', { error: String(error) });
     });
   }
@@ -378,6 +382,9 @@ class BrowserService {
   /** Mirror the browser's cookies back into the jar so status/refresh can read them. */
   async syncCookies(): Promise<void> {
     try {
+      // A jar imported during a navigation goes to the browser first, or the
+      // browser's older cookies would be written over it.
+      await this.reseedIfJarChanged();
       const context = await this.ensureContext();
       const cookies = await context.cookies();
       if (cookies.length > 0) sessionService.importCookies(JSON.stringify(cookies));

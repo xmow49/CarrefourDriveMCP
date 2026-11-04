@@ -51,6 +51,8 @@ export interface CookieInput {
   expires?: number | string;
   /** Cookie-Editor / EditThisCookie name for `expires`, in seconds. */
   expirationDate?: number;
+  /** Sent to this exact host only; otherwise to its subdomains too. */
+  hostOnly?: boolean;
   secure?: boolean;
   httpOnly?: boolean;
 }
@@ -198,6 +200,9 @@ export class SessionService {
         httpOnly: c.httpOnly ?? false,
         expires: cookieExpiry(c) ?? 'Infinity',
       });
+      // Keep the export's scope: `.carrefour.fr` (or hostOnly: false) is a
+      // domain cookie, a bare host is host-only, as the browser had it.
+      cookie.hostOnly = c.hostOnly ?? !(c.domain ?? '').startsWith('.');
       try {
         this.jar.setCookieSync(cookie, `https://${domain}${path}`, { ignoreError: false });
         stored += 1;
@@ -222,13 +227,20 @@ export class SessionService {
   }> {
     this.ensureLoaded();
     const out = [];
+    const seen = new Set<string>();
     for (const origin of [CARREFOUR_ORIGIN, IAM_ORIGIN]) {
       for (const cookie of this.jar.getCookiesSync(origin)) {
+        // A `.carrefour.fr` cookie matches both origins: seed it once.
+        const id = `${cookie.key}|${cookie.domain}|${cookie.path}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
         const expiry = cookie.expiryTime();
+        const host = cookie.domain ?? new URL(origin).hostname;
         out.push({
           name: cookie.key,
           value: cookie.value,
-          domain: cookie.domain ?? new URL(origin).hostname,
+          // Playwright reads a domain without a leading dot as host-only.
+          domain: cookie.hostOnly === false ? `.${host}` : host,
           path: cookie.path ?? '/',
           secure: cookie.secure,
           httpOnly: cookie.httpOnly,

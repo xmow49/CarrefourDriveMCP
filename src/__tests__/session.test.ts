@@ -113,3 +113,16 @@ test('exported expiry dates are kept, and expired cookies are not sent', () => {
   const live = JSON.parse(readFileSync(process.env.CARREFOUR_SESSION_FILE!, 'utf8')).cookies[0];
   assert.equal(Math.round(Date.parse(live.expires) / 1000), Math.round(inAnHour));
 });
+
+test('browser seeding keeps domain cookies as domain cookies, once each', () => {
+  const s = new SessionService();
+  s.replaceCookies(
+    JSON.stringify([
+      { name: 'FRO_STORE', value: '1', domain: '.carrefour.fr' },
+      { name: 'FRO_SESSION_ID', value: '2', domain: 'www.carrefour.fr' },
+    ])
+  );
+  const seeded = s.toPlaywrightCookies().map((c) => `${c.name}@${c.domain}`).sort();
+  // `.carrefour.fr` stays a domain cookie (the dot keeps Playwright from narrowing it), a bare host stays host-only.
+  assert.deepEqual(seeded, ['FRO_SESSION_ID@www.carrefour.fr', 'FRO_STORE@.carrefour.fr']);
+});

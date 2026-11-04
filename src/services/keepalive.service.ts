@@ -43,6 +43,21 @@ function writeState(state: KeepAliveState, file = stateFile()): void {
 }
 
 /**
+ * 401, or a JSON 403 from the API, means the session is gone. A 403 in HTML is
+ * Cloudflare challenging the browser, which says nothing about the session.
+ */
+export function classifyProbe(status: number, contentType: string | null): { outcome: ProbeOutcome; reason?: string } {
+  if (status === 401) return { outcome: 'expired', reason: 'HTTP 401' };
+  if (status === 403) {
+    return (contentType ?? '').includes('json')
+      ? { outcome: 'expired', reason: 'HTTP 403' }
+      : { outcome: 'error', reason: 'HTTP 403 without JSON (Cloudflare challenge?)' };
+  }
+  if (status < 200 || status >= 300) return { outcome: 'error', reason: `HTTP ${status}` };
+  return { outcome: 'ok' };
+}
+
+/**
  * One authenticated request. httpService already renews the session through
  * the SSO cookie on a 401, so a 401/403 here means it is really gone.
  */
@@ -56,9 +71,7 @@ export async function probeSession(
       url: PROBE_URL,
       headers: { accept: 'application/json, text/plain, */*', 'x-requested-with': 'XMLHttpRequest' },
     });
-    if (result.status === 401 || result.status === 403) return { outcome: 'expired', reason: `HTTP ${result.status}` };
-    if (!result.ok) return { outcome: 'error', reason: `HTTP ${result.status}` };
-    return { outcome: 'ok' };
+    return classifyProbe(result.status, result.contentType);
   } catch (error) {
     return { outcome: 'error', reason: (error as Error).message.slice(0, 200) };
   }
@@ -78,7 +91,10 @@ export function keepAliveMinutes(env: NodeJS.ProcessEnv = process.env): number {
  * Each tick records its outcome in keepalive-state.json, which
  * `check-session` reads to alert without starting a browser.
  */
-export async function keepAliveTick(session: SessionService = sessionService): Promise<KeepAliveState> {
+export async function keepAliveTick(
+  session: SessionService = sessionService,
+  opts: { record?: boolean } = {}
+): Promise<KeepAliveState> {
   if (session.hasSso()) {
     const refreshed = await refreshSession(session).catch((error) => ({ ok: false, reason: String(error) }));
     logger.info('Keep-alive: SSO refresh', { ok: refreshed.ok, reason: refreshed.reason });
@@ -95,7 +111,7 @@ export async function keepAliveTick(session: SessionService = sessionService): P
     reason: probe.reason,
     intervalMinutes: keepAliveMinutes(),
   };
-  writeState(state);
+  if (opts.record !== false) writeState(state);
   return state;
 }
 
