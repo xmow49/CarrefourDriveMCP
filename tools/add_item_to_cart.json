@@ -1,6 +1,6 @@
 {
   "name": "add_item_to_cart",
-  "description": "Adds or updates a product item in the authenticated user's cart on Carrefour France. Allows specifying the product EAN, desired quantity, the basket service (store/drive), and the sub-basket type (e.g. drive click-and-collect). Also accepts a tracking context to indicate the page type and ID from which the action was triggered. Returns updated cart totals and summary.",
+  "description": "Adds or updates a product item in the authenticated user's cart on Carrefour France. Allows specifying the product EAN, desired quantity, the basket service (store/drive), and the sub-basket type (e.g. drive click-and-collect). Also accepts a tracking context to indicate the page type and ID from which the action was triggered. Returns updated cart totals and summary. The quantity is absolute (counter 2 sets the line to 2). counter 0 removes the line (it is sent as remove_item_from_cart, because Carrefour ignores a zero quantity here).",
   "parameters": {
     "type": "object",
     "properties": {

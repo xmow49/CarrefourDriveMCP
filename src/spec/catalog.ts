@@ -80,7 +80,7 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   simulate_cart_for_store: { toolset: 'cart', kind: 'read' },
   get_checkout_recommendations: { toolset: 'cart', kind: 'read' },
   add_item_to_cart: { toolset: 'cart', kind: 'write', idempotent: true },
-  add_item_to_cart_by_ean: { toolset: 'cart', kind: 'write' },
+  remove_item_from_cart: { toolset: 'cart', kind: 'write', idempotent: true },
   apply_promo_code_to_cart: { toolset: 'cart', kind: 'write', idempotent: true },
 
   // stores and slots

@@ -265,7 +265,7 @@ payload, or set `CARREFOUR_COMPACT=0` to turn this off globally.
 | --- | --- | --- |
 | `get_cart` | GET /api/cart | — |
 | `add_item_to_cart` | PATCH /api/cart | `ean`, `counter`, `basketServiceId`, `subBasketType` |
-| `add_item_to_cart_by_ean` | PATCH /api/cart/items | `ean`, `basketServiceId`, `subBasketType` |
+| `remove_item_from_cart` | PATCH /api/cart/items | `ean`, `basketServiceId`, `subBasketType` |
 | `apply_promo_code_to_cart` | POST /api/cart/promo_code | `code`, `facilityServiceId`, `subBasketType` |
 | `simulate_cart_for_store` | GET /api/cart/simulate | `storeRef` |
 | `get_delivery_timeslots` | GET /api/timeslots | `facilityServiceId` |

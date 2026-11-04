@@ -123,6 +123,23 @@ export async function executeSpec(spec: ToolSpec, args: Record<string, unknown>)
   return (await executeSpecData(spec, args, { raw })).result;
 }
 
+/**
+ * Carrefour ignores `counter: 0` on PATCH /api/cart: the line keeps its
+ * quantity and the call still returns 200. A zero quantity on add_item_to_cart
+ * is therefore sent as remove_item_from_cart, the call the website makes.
+ */
+export function routeZeroQuantity(
+  spec: ToolSpec,
+  args: Record<string, unknown>,
+  specs: ToolSpec[]
+): { spec: ToolSpec; args: Record<string, unknown> } {
+  if (spec.name !== 'add_item_to_cart' || Number(args.counter) !== 0) return { spec, args };
+  const remove = specs.find((s) => s.name === 'remove_item_from_cart');
+  if (!remove) return { spec, args };
+  const { ean, basketServiceId, subBasketType, [RAW_RESPONSE_PARAM]: raw } = args;
+  return { spec: remove, args: { ean, basketServiceId, subBasketType, [RAW_RESPONSE_PARAM]: raw } };
+}
+
 export interface RegisterResult extends LoadResult {
   /** Tools actually exposed after toolset filtering. */
   registered: string[];
@@ -170,7 +187,10 @@ export function registerSpecTools(
     server.registerTool(
       spec.name,
       { description, inputSchema: shape, annotations: annotationsFor(meta) },
-      async (args: Record<string, unknown>) => executeSpec(spec, args ?? {})
+      async (args: Record<string, unknown>) => {
+        const routed = routeZeroQuantity(spec, args ?? {}, load.specs);
+        return executeSpec(routed.spec, routed.args);
+      }
     );
     registered.push(spec.name);
   }

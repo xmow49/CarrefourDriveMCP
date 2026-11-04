@@ -100,17 +100,16 @@ test('add_item_to_cart: PATCH with a nested JSON body', () => {
   });
 });
 
-test('add_item_to_cart_by_ean: optional tracking fields vanish when not supplied', () => {
-  const req = buildRequest(spec('add_item_to_cart_by_ean'), {
+test('add_item_to_cart: optional tracking fields vanish when not supplied', () => {
+  const req = buildRequest(spec('add_item_to_cart'), {
     ean: '123',
+    counter: 1,
     basketServiceId: 'bs',
     subBasketType: 'drive_clcv',
   });
   assert.deepEqual(JSON.parse(req.body as string), {
-    ean: '123',
-    basketServiceId: 'bs',
-    subBasketType: 'drive_clcv',
     trackingRequest: {},
+    items: [{ basketServiceId: 'bs', counter: 1, ean: '123', subBasketType: 'drive_clcv' }],
   });
 });
 
