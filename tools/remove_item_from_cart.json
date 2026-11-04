@@ -1,0 +1,54 @@
+{
+  "name": "remove_item_from_cart",
+  "description": "Removes a product line entirely from the authenticated user's cart on Carrefour France, whatever its quantity. Use this to delete an item: add_item_to_cart with counter 0 does not remove anything on Carrefour's side. Idempotent: removing a product that is not in the cart succeeds and changes nothing. Takes the product EAN, the basket service ID (the cart's facilityServiceId, shown by get_cart) and the sub-basket type (e.g. 'drive_clcv').",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "ean": {
+        "type": "string",
+        "description": "The EAN (barcode) of the product to remove from the cart."
+      },
+      "basketServiceId": {
+        "type": "string",
+        "description": "The basket service ID of the cart line (the cart's facilityServiceId, e.g. '0678-150-7052')."
+      },
+      "subBasketType": {
+        "type": "string",
+        "description": "The sub-basket type, e.g. 'drive_clcv' for drive click-and-collect."
+      }
+    },
+    "required": [
+      "ean",
+      "basketServiceId",
+      "subBasketType"
+    ]
+  },
+  "request": {
+    "method": "PATCH",
+    "url": "https://www.carrefour.fr/api/cart/items",
+    "headers": {
+      "x-requested-with": "XMLHttpRequest",
+      "accept": "application/json, text/plain, */*",
+      "content-type": "application/json"
+    },
+    "query": {},
+    "body": {
+      "trackingRequest": {
+        "pageType": "basket",
+        "pageId": "basket"
+      },
+      "basketServiceId": {
+        "$param": "basketServiceId"
+      },
+      "ean": {
+        "$param": "ean"
+      },
+      "subBasketType": {
+        "$param": "subBasketType"
+      }
+    },
+    "content_type": "application/json"
+  },
+  "requires_auth": true,
+  "example_traces": []
+}
