@@ -1,6 +1,6 @@
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionService, parseCookieInput } from '../services/session.service.js';
@@ -76,4 +76,40 @@ test('Set-Cookie responses are folded back into the jar', () => {
   const s = new SessionService();
   s.storeSetCookies(['newsid=fromserver; Path=/; Domain=.carrefour.fr'], 'https://www.carrefour.fr/api/cart');
   assert.match(s.getCookieHeader(), /newsid=fromserver/);
+});
+
+test('a jar rewritten by another process is reloaded on the next access', () => {
+  const server = new SessionService();
+  server.importCookies('FRO_SESSION_ID=old');
+  const gen = server.jarGeneration();
+
+  const importer = new SessionService();
+  importer.replaceCookies('FRO_SESSION_ID=new; FRO_STORE=1');
+
+  assert.equal(server.getCookieHeader(), 'FRO_SESSION_ID=new; FRO_STORE=1');
+  assert.equal(server.jarGeneration(), gen + 1);
+  // Its own writes do not count as a change.
+  server.importCookies('FRO_X=1');
+  assert.equal(server.jarGeneration(), gen + 1);
+});
+
+test('replaceCookies drops the previous cookies', () => {
+  const s = new SessionService();
+  s.importCookies('FRO_A=1; FRO_B=2');
+  s.replaceCookies('FRO_C=3');
+  assert.equal(s.getCookieHeader(), 'FRO_C=3');
+});
+
+test('exported expiry dates are kept, and expired cookies are not sent', () => {
+  const s = new SessionService();
+  const inAnHour = Date.now() / 1000 + 3600;
+  s.replaceCookies(
+    JSON.stringify([
+      { name: 'FRO_LIVE', value: '1', domain: 'www.carrefour.fr', expirationDate: inAnHour },
+      { name: 'FRO_DEAD', value: '1', domain: 'www.carrefour.fr', expirationDate: 1000 },
+    ])
+  );
+  assert.equal(s.getCookieHeader(), 'FRO_LIVE=1');
+  const live = JSON.parse(readFileSync(process.env.CARREFOUR_SESSION_FILE!, 'utf8')).cookies[0];
+  assert.equal(Math.round(Date.parse(live.expires) / 1000), Math.round(inAnHour));
 });

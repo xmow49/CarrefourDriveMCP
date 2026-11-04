@@ -150,34 +150,3 @@ export async function ssoStatus(session: SessionService = sessionService): Promi
     return { present: true, error: (error as Error).message };
   }
 }
-
-let keepAliveTimer: NodeJS.Timeout | null = null;
-
-/**
- * The SSO session dies after 60 min of inactivity, which a long-lived MCP
- * server would otherwise hit constantly. Replaying the OAuth chain on a timer
- * touches the SSO session *and* keeps the storefront cookies fresh.
- *
- * Set CARREFOUR_KEEPALIVE_MINUTES=0 to opt out.
- */
-export function startKeepAlive(session: SessionService = sessionService): void {
-  const minutes = parseInt(process.env.CARREFOUR_KEEPALIVE_MINUTES || '30', 10);
-  if (!Number.isFinite(minutes) || minutes <= 0 || keepAliveTimer) return;
-
-  keepAliveTimer = setInterval(() => {
-    if (!session.hasSso()) return;
-    refreshSession(session)
-      .then((result) => logger.info('Keep-alive', { ok: result.ok, reason: result.reason }))
-      .catch((error) => logger.error('Keep-alive failed', { error: String(error) }));
-  }, minutes * 60_000);
-
-  // Never hold the process open just for the keep-alive.
-  keepAliveTimer.unref?.();
-}
-
-export function stopKeepAlive(): void {
-  if (keepAliveTimer) {
-    clearInterval(keepAliveTimer);
-    keepAliveTimer = null;
-  }
-}

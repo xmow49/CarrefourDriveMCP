@@ -2,8 +2,9 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { config } from 'dotenv';
 import { createServer } from './server.js';
-import { startKeepAlive } from './services/auth.service.js';
+import { startKeepAlive } from './services/keepalive.service.js';
 import { browserService } from './services/browser.service.js';
+import { runCli } from './cli.js';
 import { logger } from './utils/logger.js';
 
 config();
@@ -16,6 +17,9 @@ function wantsHttp(): boolean {
 }
 
 async function main(): Promise<void> {
+  const cliCode = await runCli(process.argv.slice(2));
+  if (cliCode !== null) process.exit(cliCode);
+
   if (wantsHttp()) {
     // Imported lazily so the stdio path never loads express.
     const { startHttpServer } = await import('./http/server.js');
@@ -27,8 +31,7 @@ async function main(): Promise<void> {
     process.stderr.write(`[carrefour-drive] MCP server ready — ${toolCount} API tools loaded\n`);
   }
 
-  // The IAM SSO session dies after 60 min idle, which a long-running server
-  // would otherwise hit between two user requests.
+  // Both the SSO and the store sessions die when idle; see keepalive.service.ts.
   startKeepAlive();
 
   // The browser is a child process; leaving it behind would lock the profile.

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, chmodSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, chmodSync, renameSync, statSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { CookieJar, Cookie } from 'tough-cookie';
 import { logger } from '../utils/logger.js';
@@ -24,12 +24,33 @@ function sessionFile(): string {
     : dataPath('sessions', 'cookies.json');
 }
 
+/** Identity of the jar file on disk, to notice another process rewrote it. */
+function fileStamp(file: string): string {
+  try {
+    const st = statSync(file);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return '';
+  }
+}
+
+/** Expiry of an exported cookie (Cookie-Editor, DevTools, Playwright), or undefined for a session cookie. */
+export function cookieExpiry(c: CookieInput & { expiry?: unknown }): Date | undefined {
+  for (const value of [c.expirationDate, c.expires, c.expiry]) {
+    if (typeof value === 'number' && value > 0) return new Date(value * 1000);
+    if (typeof value === 'string' && value && !Number.isNaN(Date.parse(value))) return new Date(value);
+  }
+  return undefined;
+}
+
 export interface CookieInput {
   name: string;
   value: string;
   domain?: string;
   path?: string;
   expires?: number | string;
+  /** Cookie-Editor / EditThisCookie name for `expires`, in seconds. */
+  expirationDate?: number;
   secure?: boolean;
   httpOnly?: boolean;
 }
@@ -80,10 +101,17 @@ export function parseCookieInput(input: string): CookieInput[] {
 export class SessionService {
   private jar = new CookieJar();
   private loaded = false;
+  /** fileStamp() of the jar as last read or written by this process. */
+  private stamp = '';
+  /** Bumped each time the jar is reloaded from disk. */
+  private generation = 0;
 
   /** Load the persisted jar, then layer any env-provided cookies on top. */
   private ensureLoaded(): void {
-    if (this.loaded) return;
+    if (this.loaded) {
+      this.reloadIfChanged();
+      return;
+    }
     this.loaded = true;
 
     const file = sessionFile();
@@ -115,6 +143,41 @@ export class SessionService {
         logger.error('Failed to parse CARREFOUR_COOKIES', { error: String(error) });
       }
     }
+    this.stamp = fileStamp(file);
+  }
+
+  /**
+   * Another process rewrote the jar (an `import-cookies` run, a second server
+   * sharing the file): take its version, so fresh cookies are used without a
+   * restart and the stale in-memory jar never overwrites them.
+   */
+  private reloadIfChanged(): void {
+    const file = sessionFile();
+    const stamp = fileStamp(file);
+    if (!stamp || stamp === this.stamp) return;
+    this.stamp = stamp;
+    try {
+      this.jar = CookieJar.deserializeSync(JSON.parse(readFileSync(file, 'utf8')));
+      this.generation += 1;
+      logger.info('Cookie jar changed on disk, reloaded', { file });
+    } catch (error) {
+      logger.error('Cookie jar changed on disk but could not be read, keeping the current one', {
+        error: String(error),
+      });
+    }
+  }
+
+  /** Changes when the jar was reloaded from disk, so the browser knows to take the new cookies. */
+  jarGeneration(): number {
+    this.ensureLoaded();
+    return this.generation;
+  }
+
+  /** Replace every stored cookie with `input`, and persist. Returns how many were stored. */
+  replaceCookies(input: string): number {
+    this.ensureLoaded();
+    this.jar = new CookieJar();
+    return this.importCookies(input);
   }
 
   /** Add cookies from any supported input format. Returns how many were stored. */
@@ -133,6 +196,7 @@ export class SessionService {
         path,
         secure: c.secure ?? true,
         httpOnly: c.httpOnly ?? false,
+        expires: cookieExpiry(c) ?? 'Infinity',
       });
       try {
         this.jar.setCookieSync(cookie, `https://${domain}${path}`, { ignoreError: false });
@@ -176,13 +240,19 @@ export class SessionService {
     return out;
   }
 
-  /** Serialize the jar to disk with owner-only permissions. */
+  /**
+   * Serialize the jar to disk with owner-only permissions. Written to a temp
+   * file then renamed, so a process reloading the jar never reads half of it.
+   */
   persist(): void {
     const file = sessionFile();
+    const tmp = `${file}.${process.pid}.tmp`;
     try {
       mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, JSON.stringify(this.jar.serializeSync(), null, 2), { mode: 0o600 });
-      chmodSync(file, 0o600);
+      writeFileSync(tmp, JSON.stringify(this.jar.serializeSync(), null, 2), { mode: 0o600 });
+      chmodSync(tmp, 0o600);
+      renameSync(tmp, file);
+      this.stamp = fileStamp(file);
     } catch (error) {
       logger.error('Failed to persist cookie jar', { error: String(error) });
     }
@@ -243,6 +313,7 @@ export class SessionService {
   clear(): void {
     this.jar = new CookieJar();
     this.loaded = true;
+    this.stamp = '';
     const file = sessionFile();
     if (existsSync(file)) {
       try {

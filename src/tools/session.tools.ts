@@ -18,6 +18,7 @@ import {
   lastBackgroundLogin,
 } from '../services/browser-login.js';
 import { browserService } from '../services/browser.service.js';
+import { PROBE_URL } from '../services/keepalive.service.js';
 
 function humanDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -29,8 +30,6 @@ function text(body: string, isError = false) {
   return { content: [{ type: 'text' as const, text: body }], isError };
 }
 
-/** Endpoint used as a cheap "am I logged in?" probe. */
-const PROBE_URL = `${CARREFOUR_ORIGIN}/api/user/secured/loyalty/balance`;
 
 export function registerSessionTools(server: McpServer): void {
   server.tool(

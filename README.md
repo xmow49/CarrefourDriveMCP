@@ -164,8 +164,11 @@ an OTP. So the login is interactive, once:
 
 From then on the session renews itself silently: the server replays the SSO
 authorize → callback redirect before authenticated calls, after a `401`/`403`,
-and every 30 minutes as a keep-alive. You only log in again when the SSO cookie
-itself expires (24 h max, or 60 min idle) — the tools say so explicitly.
+and every 30 minutes as a keep-alive. The same keep-alive also makes one
+authenticated call, which keeps the store session (`FRO_*` cookies) alive after
+the SSO cookie itself is gone (24 h max, or 60 min idle): that session lasts as
+long as it is used. You only log in again when both have expired — the tools say
+so explicitly.
 
 Check the state at any time with `carrefour_session_status` (`verify: true` makes
 a real call).
@@ -183,7 +186,39 @@ a real call).
 > automatic renewal is impossible.
 
 The cookie jar lives in `<data dir>/sessions/cookies.json` (`0600`) and is
-re-injected into the browser profile on every start.
+re-injected into the browser profile on every start. When another process
+rewrites it, a running server reloads it and hands the new cookies to its
+browser on the next request: no restart needed.
+
+### Import cookies from a terminal
+
+When you cannot log in on the server (no OTP at hand, headless machine), export
+the cookies from a browser that is signed in and import them with the guided
+command:
+
+```bash
+npx carrefour-drive-mcp import-cookies            # guided: paste 2 Cookie-Editor exports
+npx carrefour-drive-mcp import-cookies www.json moncompte.json   # from files (deleted afterwards)
+```
+
+It keeps only the session cookies (`FRO_*` on www, `c4iamsecuretk` and
+`amlbcookie` on moncompte), backs up the previous jar (last 5 kept), writes the
+new one and checks it against carrefour.fr in a separate browser profile.
+`--dry-run` shows what would be kept; no cookie value is ever printed.
+
+### Get alerted when the session dies
+
+Each keep-alive records its result in `<data dir>/keepalive-state.json`.
+`check-session` reads it without starting a browser, so a cron job can alert you:
+
+```bash
+npx carrefour-drive-mcp check-session --once
+```
+
+It prints nothing while the session is fine, and one message per episode
+otherwise (session expired, check failing, or no recent keep-alive because the
+server is not running). Exit code: `0` OK, `2` expired, `1` other problem.
+`--probe` runs a live check instead of reading the record.
 
 ## Remote connector (phone, web)
 
@@ -428,7 +463,7 @@ See `.env.example`. Main variables:
 | `CARREFOUR_DATA_DIR` | `~/.carrefour-drive-mcp` (repo `data/` from source) | root of everything written below |
 | `CARREFOUR_SESSION_FILE` | `<data>/sessions/cookies.json` | persisted cookie jar |
 | `CARREFOUR_BROWSER_PROFILE` | `<data>/browser-profile` | persistent Chromium profile |
-| `CARREFOUR_KEEPALIVE_MINUTES` | `30` | SSO keep-alive period; `0` disables |
+| `CARREFOUR_KEEPALIVE_MINUTES` | `30` | keep-alive period (SSO renewal + one authenticated call); `0` disables |
 | `CARREFOUR_OAUTH_CLIENT_ID` | `carrefour_onecarrefour_web` | OAuth2 client used for refresh |
 | `CARREFOUR_OAUTH_REDIRECT_URI` | `https://www.carrefour.fr/login/check` | BFF callback |
 | `CARREFOUR_OAUTH_SCOPE` | `openid iam` | requested scopes |

@@ -120,6 +120,8 @@ export interface FetchResponse {
 class BrowserService {
   private context: BrowserContext | null = null;
   private headed = false;
+  /** sessionService.jarGeneration() last handed to the browser. */
+  private seededGeneration = 0;
   private starting: Promise<BrowserContext> | null = null;
   /** One parked page per origin: an in-page fetch is subject to CORS. */
   private pages = new Map<string, Page>();
@@ -300,9 +302,27 @@ class BrowserService {
     return false;
   }
 
+  /**
+   * Requests carry the browser's cookies, not the jar's. When the jar was
+   * replaced on disk (import-cookies), hand the new cookies to the running
+   * browser, so no restart is needed.
+   */
+  private async reseedIfJarChanged(): Promise<void> {
+    const generation = sessionService.jarGeneration();
+    if (generation === this.seededGeneration) return;
+    this.seededGeneration = generation;
+    const seeded = sessionService.toPlaywrightCookies();
+    if (seeded.length === 0) return;
+    const context = await this.ensureContext();
+    await context.addCookies(seeded).catch((error) => {
+      logger.error('Could not hand the reloaded cookies to the browser', { error: String(error) });
+    });
+  }
+
   /** Issue one request from inside the page, i.e. through Chromium's own stack. */
   async fetch(request: FetchRequest): Promise<FetchResponse> {
     const origin = new URL(request.url).origin;
+    await this.reseedIfJarChanged();
 
     const run = async (): Promise<FetchResponse> => {
       const page = await this.pageFor(origin);
@@ -348,6 +368,7 @@ class BrowserService {
 
   /** Drive a real navigation — used for the OAuth redirect chain. */
   async navigate(url: string): Promise<{ status: number | null; finalUrl: string }> {
+    await this.reseedIfJarChanged();
     const page = await this.pageFor(new URL(url).origin);
     const response = await page.goto(url, { waitUntil: 'domcontentloaded' });
     await this.syncCookies();
