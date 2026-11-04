@@ -45,10 +45,13 @@ function offerOf(attributes: Json): Json | null {
   return isObject(offer) ? offer : null;
 }
 
-function describeLine(line: Json, cart: Json): string | null {
-  const attributes = line.product?.attributes;
-  if (!isObject(attributes)) return null;
+function describeLine(line: Json, cart: Json): string {
   const currency = cart.currency ?? '€';
+  const attributes = line.product?.attributes;
+  if (!isObject(attributes)) {
+    // Delisted or marketplace line without a product sheet: still a line in the cart.
+    return `- ${line.counter ?? '?'} × (unknown product, raw_response: true for details): ${money(line.totalItemPrice, currency)}`;
+  }
 
   const title = [attributes.title ?? '(untitled)', attributes.packaging].filter(Boolean).join(', ');
   let out = `- ${line.counter ?? '?'} × ${title} (EAN ${attributes.ean ?? '?'}): ${money(line.totalItemPrice, currency)}`;
@@ -60,8 +63,12 @@ function describeLine(line: Json, cart: Json): string | null {
     out += ` (+${money(line.totalItemCardSaving, currency)} on loyalty card)`;
   }
 
+  // Carrefour lists the product's promotion even when this quantity does not trigger it.
   const promotion = offerOf(attributes)?.promotion;
-  if (isObject(promotion) && promotion.label) out += ` — promo "${promotion.label}"`;
+  if (isObject(promotion) && promotion.label) {
+    const applied = typeof line.totalItemDiscount === 'number' && line.totalItemDiscount > 0;
+    out += applied ? ` — promo "${promotion.label}"` : ` — promo available, not applied: "${promotion.label}"`;
+  }
   if (line.isFree) out += ' — FREE';
   if (line.available === false) out += ' — UNAVAILABLE';
   if (line.isStockOff) out += ' — OUT OF STOCK';
@@ -84,13 +91,10 @@ export function summarizeCart(data: unknown): string | null {
   let units = 0;
   for (const group of cart.items) {
     if (!isObject(group) || !Array.isArray(group.products)) continue;
-    const described = group.products
-      .filter(isObject)
-      .map((line: Json) => {
-        if (typeof line.counter === 'number') units += line.counter;
-        return describeLine(line, cart);
-      })
-      .filter((l: string | null): l is string => l !== null);
+    const described = group.products.filter(isObject).map((line: Json) => {
+      if (typeof line.counter === 'number') units += line.counter;
+      return describeLine(line, cart);
+    });
     if (described.length > 0) lines.push(`[${group.category ?? 'Other'}]`, ...described);
   }
 

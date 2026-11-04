@@ -11,7 +11,7 @@ test('cart summary lists every line with quantity, EAN and price paid', () => {
   assert.match(s, /1 × Pâte Feuilletée Pur Beurre CARREFOUR ORIGINAL, le paquet de 230g \(EAN 3270190204008\): 1\.19 €/);
   assert.match(s, /\(EAN 3083681040609\): 1\.24 € \(was 1\.65 €, −0\.41 €\) — promo "1 acheté = 25% de remise"/);
   assert.match(s, /\(EAN 3560070150403\): 4\.79 € \(\+0\.20 € on loyalty card\)/);
-  assert.match(s, /\(EAN 8723400944171\): 2\.59 € — promo "Le 2ème à -50%"/);
+  assert.match(s, /\(EAN 8723400944171\): 2\.59 € — promo available, not applied: "Le 2ème à -50%"/);
   assert.match(s, /\[Charcuterie et Traiteur\]/);
 });
 
@@ -49,6 +49,14 @@ test('cart summary mentions a booked slot, an empty cart and other baskets', () 
   assert.match(s, /Slot: booked, 05\/11\/2026 08:00–08:30/);
   assert.match(s, /\(empty cart\)/);
   assert.match(s, /Also present \(not listed here\): preorders/);
+});
+
+test('a line without a product sheet is still listed', () => {
+  const data = clone();
+  data.cart.items = [{ category: 'Marketplace', products: [{ counter: 2, totalItemPrice: 9.9, product: null }] }];
+  const s = summarizeCart(data)!;
+  assert.match(s, /- 2 × \(unknown product, raw_response: true for details\): 9\.90 €/);
+  assert.doesNotMatch(s, /empty cart/);
 });
 
 test('an unexpected shape falls back to null, and other tools have no summary', () => {
