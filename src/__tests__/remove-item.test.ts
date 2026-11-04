@@ -37,6 +37,10 @@ test('add_item_to_cart with counter 0 is routed to remove_item_from_cart', () =>
   assert.deepEqual(routed.args, { ...line, [RAW_RESPONSE_PARAM]: true });
 });
 
+test('a negative quantity is a removal too', () => {
+  assert.equal(routeZeroQuantity(spec('add_item_to_cart'), { ...line, counter: -1 }, specs).spec.name, 'remove_item_from_cart');
+});
+
 test('a non-zero quantity and other tools are left alone', () => {
   const add = spec('add_item_to_cart');
   assert.equal(routeZeroQuantity(add, { ...line, counter: 2 }, specs).spec, add);

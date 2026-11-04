@@ -125,7 +125,7 @@ export async function executeSpec(spec: ToolSpec, args: Record<string, unknown>)
 
 /**
  * Carrefour ignores `counter: 0` on PATCH /api/cart: the line keeps its
- * quantity and the call still returns 200. A zero quantity on add_item_to_cart
+ * quantity and the call still returns 200. A zero (or negative) quantity on add_item_to_cart
  * is therefore sent as remove_item_from_cart, the call the website makes.
  */
 export function routeZeroQuantity(
@@ -133,7 +133,7 @@ export function routeZeroQuantity(
   args: Record<string, unknown>,
   specs: ToolSpec[]
 ): { spec: ToolSpec; args: Record<string, unknown> } {
-  if (spec.name !== 'add_item_to_cart' || Number(args.counter) !== 0) return { spec, args };
+  if (spec.name !== 'add_item_to_cart' || !(Number(args.counter) <= 0)) return { spec, args };
   const remove = specs.find((s) => s.name === 'remove_item_from_cart');
   if (!remove) return { spec, args };
   const { ean, basketServiceId, subBasketType, [RAW_RESPONSE_PARAM]: raw } = args;
