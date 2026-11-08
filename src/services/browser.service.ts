@@ -1,6 +1,6 @@
-import { mkdirSync, readlinkSync, rmSync } from 'fs';
+import { mkdirSync, readdirSync, readlinkSync, rmSync } from 'fs';
 import { hostname } from 'os';
-import { join, resolve } from 'path';
+import { basename, dirname, join, resolve } from 'path';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { SharedBrowser, sharedBrowserEnabled, sharedBrowserPort } from './shared-browser.js';
 import { sessionService } from './session.service.js';
@@ -51,7 +51,7 @@ function parkingUrl(origin: string): string {
 
 const SINGLETON_FILES = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
 
-function processAlive(pid: number): boolean {
+export function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -77,11 +77,7 @@ export function clearStaleProfileLock(dir: string, host: string = hostname()): b
   } catch {
     return false; // no lock
   }
-  const dash = target.lastIndexOf('-');
-  const lockHost = dash > 0 ? target.slice(0, dash) : target;
-  const pid = dash > 0 ? Number(target.slice(dash + 1)) : NaN;
-  const stale = lockHost !== host || !Number.isInteger(pid) || !processAlive(pid);
-  if (!stale) return false;
+  if (!lockIsStale(target, host)) return false;
   for (const name of SINGLETON_FILES) {
     try {
       rmSync(join(dir, name), { force: true });
@@ -91,6 +87,68 @@ export function clearStaleProfileLock(dir: string, host: string = hostname()): b
   }
   logger.info('Removed a stale browser profile lock', { dir, lock: target });
   return true;
+}
+
+function lockIsStale(target: string, host: string): boolean {
+  const dash = target.lastIndexOf('-');
+  const lockHost = dash > 0 ? target.slice(0, dash) : target;
+  const pid = dash > 0 ? Number(target.slice(dash + 1)) : NaN;
+  return lockHost !== host || !Number.isInteger(pid) || !processAlive(pid);
+}
+
+/** The "<host>-<pid>" of the live Chromium holding `dir`, or null when the profile is free. */
+export function liveProfileLock(dir: string, host: string = hostname()): string | null {
+  let target: string;
+  try {
+    target = readlinkSync(join(dir, 'SingletonLock'));
+  } catch {
+    return null;
+  }
+  return lockIsStale(target, host) ? null : target;
+}
+
+const PRIVATE_SUFFIX = '-pid';
+
+/**
+ * The profile this process should launch Chromium on.
+ *
+ * A host can run several copies of this server on one data dir: Hermes, for
+ * one, starts an MCP process per agent session, and they all resolve to the
+ * same profile. Chromium opens a profile once, so every copy but the first
+ * failed with "Failed to create a ProcessSingleton" — tool calls and the
+ * keep-alive alike. When the profile is held by a live Chromium (never ours:
+ * this is only called when we hold no context), fall back to a private
+ * profile `<dir>-pid<pid>`, seeded from the cookie jar like any fresh launch,
+ * and removed when the process exits.
+ */
+export function pickProfileDir(dir: string, host: string = hostname(), pid: number = process.pid): string {
+  clearStaleProfileLock(dir, host);
+  if (!liveProfileLock(dir, host)) return dir;
+  return `${dir}${PRIVATE_SUFFIX}${pid}`;
+}
+
+/** Remove private profiles (`<dir>-pid<N>`) left by processes that are gone. */
+export function sweepPrivateProfiles(dir: string, keepPid: number = process.pid): string[] {
+  const removed: string[] = [];
+  const prefix = `${basename(dir)}${PRIVATE_SUFFIX}`;
+  let entries: string[];
+  try {
+    entries = readdirSync(dirname(dir));
+  } catch {
+    return removed;
+  }
+  for (const name of entries) {
+    if (!name.startsWith(prefix)) continue;
+    const pid = Number(name.slice(prefix.length));
+    if (!Number.isInteger(pid) || pid === keepPid || processAlive(pid)) continue;
+    try {
+      rmSync(join(dirname(dir), name), { recursive: true, force: true });
+      removed.push(name);
+    } catch {
+      // best effort
+    }
+  }
+  return removed;
 }
 
 export function profileDir(): string {
@@ -216,10 +274,19 @@ class BrowserService {
 
   private async launch(headless: boolean): Promise<BrowserContext> {
     if (this.isShared()) return this.connectShared();
-    const dir = profileDir();
+    // This process holds no context here, so any live lock is someone else's.
+    const base = profileDir();
+    const dir = pickProfileDir(base);
+    if (dir !== base) {
+      sweepPrivateProfiles(base);
+      logger.warn('Browser profile in use by another process, using a private one', {
+        profile: base,
+        lock: liveProfileLock(base),
+        private: dir,
+      });
+      process.once('exit', () => rmSync(dir, { recursive: true, force: true }));
+    }
     mkdirSync(dir, { recursive: true });
-    // This process holds no context here, so any lock is someone else's.
-    clearStaleProfileLock(dir);
 
     // Imported at call time so the module graph stays loadable without playwright.
     const { chromium } = await import('playwright');
