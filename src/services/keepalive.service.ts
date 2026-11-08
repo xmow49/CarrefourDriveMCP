@@ -1,7 +1,9 @@
 import { readFileSync, renameSync, writeFileSync } from 'fs';
+import { hostname } from 'os';
 import { CARREFOUR_ORIGIN, SessionService, sessionService } from './session.service.js';
 import { httpService } from './http.service.js';
-import { refreshSession } from './auth.service.js';
+import { refreshSession, type RefreshResult } from './auth.service.js';
+import { processAlive } from './browser.service.js';
 import { dataPath } from '../utils/paths.js';
 import { logger } from '../utils/logger.js';
 
@@ -91,15 +93,41 @@ export function keepAliveMinutes(env: NodeJS.ProcessEnv = process.env): number {
  * Each tick records its outcome in keepalive-state.json, which
  * `check-session` reads to alert without starting a browser.
  */
+export interface KeepAliveDeps {
+  refresh?: (session: SessionService) => Promise<Pick<RefreshResult, 'ok' | 'reason'>>;
+  probe?: (session: SessionService) => Promise<{ outcome: ProbeOutcome; reason?: string }>;
+}
+
+/**
+ * Jar generation in which the SSO cookie was found expired. Replaying the
+ * OAuth chain with a dead SSO cookie can only land on the login page again,
+ * so it is not retried — and not logged as an error every tick — until new
+ * cookies are imported (which bumps the generation).
+ */
+let ssoExpiredInGeneration: number | null = null;
+
+export function resetSsoMemo(): void {
+  ssoExpiredInGeneration = null;
+}
+
 export async function keepAliveTick(
   session: SessionService = sessionService,
-  opts: { record?: boolean } = {}
+  opts: { record?: boolean } & KeepAliveDeps = {}
 ): Promise<KeepAliveState> {
-  if (session.hasSso()) {
-    const refreshed = await refreshSession(session).catch((error) => ({ ok: false, reason: String(error) }));
+  const refresh = opts.refresh ?? refreshSession;
+  const probeFn = opts.probe ?? probeSession;
+  if (session.hasSso() && ssoExpiredInGeneration !== session.jarGeneration()) {
+    const refreshed = await refresh(session).catch((error) => ({ ok: false, reason: String(error) }));
     logger.info('Keep-alive: SSO refresh', { ok: refreshed.ok, reason: refreshed.reason });
+    if (!refreshed.ok && refreshed.reason === 'sso-expired') {
+      ssoExpiredInGeneration = session.jarGeneration();
+      logger.warn(
+        'Keep-alive: the SSO cookie has expired; the storefront session is now kept alive by the ' +
+          'probe alone. The SSO refresh resumes after the next cookie import.'
+      );
+    }
   }
-  const probe = await probeSession(session);
+  const probe = await probeFn(session);
   logger.info('Keep-alive: storefront probe', probe);
 
   const now = new Date().toISOString();
@@ -115,6 +143,38 @@ export async function keepAliveTick(
   return state;
 }
 
+export function leaderFile(): string {
+  return dataPath('keepalive.lock');
+}
+
+/**
+ * Only one server per data dir runs the keep-alive. Several copies can share
+ * it (Hermes starts one per agent session): without this, each of them
+ * replayed the SSO chain and overwrote keepalive-state.json, and a copy that
+ * could not start its browser recorded an error for a session that was fine.
+ * The lead is "<host> <pid>" in keepalive.lock; a dead or foreign holder is
+ * taken over, so the lead moves on when its process exits.
+ */
+export function claimKeepAliveLead(
+  file: string = leaderFile(),
+  pid: number = process.pid,
+  host: string = hostname()
+): boolean {
+  try {
+    const [holderHost, holderPid] = readFileSync(file, 'utf8').trim().split(/\s+/);
+    const other = Number(holderPid);
+    if (holderHost === host && Number.isInteger(other) && other !== pid && processAlive(other)) return false;
+  } catch {
+    // no lead yet
+  }
+  try {
+    writeFileSync(file, `${host} ${pid}\n`);
+  } catch (error) {
+    logger.error('Failed to write the keep-alive lead', { error: String(error) });
+  }
+  return true;
+}
+
 let keepAliveTimer: NodeJS.Timeout | null = null;
 let firstTick: NodeJS.Timeout | null = null;
 
@@ -124,6 +184,10 @@ export function startKeepAlive(session: SessionService = sessionService): void {
   if (minutes === 0 || keepAliveTimer) return;
 
   const tick = () => {
+    if (!claimKeepAliveLead()) {
+      logger.debug('Keep-alive: another server process leads it, skipping this tick');
+      return;
+    }
     keepAliveTick(session).catch((error) => logger.error('Keep-alive failed', { error: String(error) }));
   };
   // A first probe shortly after start, so the state file is fresh after a restart.
