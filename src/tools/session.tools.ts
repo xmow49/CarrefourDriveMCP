@@ -41,6 +41,9 @@ export function registerSessionTools(server: McpServer): void {
       cookies: z.string().describe('Cookies as a header string, a JSON object, or a JSON array of cookie objects.'),
     },
     async ({ cookies }) => {
+      // Marked first: the running browser (here and in other servers) must take
+      // these cookies instead of keeping its own.
+      sessionService.markImported();
       const stored = sessionService.importCookies(cookies);
       if (stored === 0) {
         return text('No usable cookie found in the provided value.', true);

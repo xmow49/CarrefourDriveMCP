@@ -24,6 +24,11 @@ function sessionFile(): string {
     : dataPath('sessions', 'cookies.json');
 }
 
+/** Rewritten on each explicit import; see SessionService.markImported(). */
+function markerFile(): string {
+  return `${sessionFile()}.imported`;
+}
+
 /** Identity of the jar file on disk, to notice another process rewrote it. */
 function fileStamp(file: string): string {
   try {
@@ -105,8 +110,10 @@ export class SessionService {
   private loaded = false;
   /** fileStamp() of the jar as last read or written by this process. */
   private stamp = '';
-  /** Bumped each time the jar is reloaded from disk. */
+  /** Bumped each time cookies are imported by hand (here or by another process). */
   private generation = 0;
+  /** Content of the import marker as last seen (null: not read yet). */
+  private importMark: string | null = null;
 
   /** Load the persisted jar, then layer any env-provided cookies on top. */
   private ensureLoaded(): void {
@@ -146,12 +153,18 @@ export class SessionService {
       }
     }
     this.stamp = fileStamp(file);
+    this.checkImportMark();
   }
 
   /**
-   * Another process rewrote the jar (an `import-cookies` run, a second server
-   * sharing the file): take its version, so fresh cookies are used without a
-   * restart and the stale in-memory jar never overwrites them.
+   * Another process rewrote the jar: take its version, so this process never
+   * writes back an older jar over it.
+   *
+   * Only an explicit import (import-cookies, carrefour_set_cookies) bumps the
+   * generation, which makes running browsers drop their cookies for the jar's.
+   * Every server also writes its own browser's cookies back to the jar, so an
+   * ordinary rewrite must not do that: it would replace a live session with
+   * another process's copy, possibly older.
    */
   private reloadIfChanged(): void {
     const file = sessionFile();
@@ -160,16 +173,53 @@ export class SessionService {
     this.stamp = stamp;
     try {
       this.jar = CookieJar.deserializeSync(JSON.parse(readFileSync(file, 'utf8')));
-      this.generation += 1;
       logger.info('Cookie jar changed on disk, reloaded', { file });
     } catch (error) {
       logger.error('Cookie jar changed on disk but could not be read, keeping the current one', {
         error: String(error),
       });
     }
+    this.checkImportMark();
   }
 
-  /** Changes when the jar was reloaded from disk, so the browser knows to take the new cookies. */
+  /**
+   * The marker an explicit import leaves next to the jar. It is written before
+   * the jar, so a process noticing the new jar always sees the new marker too.
+   */
+  private checkImportMark(): void {
+    let mark = '';
+    try {
+      mark = readFileSync(markerFile(), 'utf8').trim();
+    } catch {
+      // No import yet.
+    }
+    if (this.importMark !== null && mark !== this.importMark) {
+      this.generation += 1;
+      logger.info('Cookies were imported by another process, handing them to the browser');
+    }
+    this.importMark = mark;
+  }
+
+  /**
+   * Record an explicit import, just before the imported cookies are written:
+   * this process and every other server hand them to their browser on their
+   * next request.
+   */
+  markImported(): void {
+    this.ensureLoaded();
+    const mark = `${Date.now()}-${process.pid}`;
+    try {
+      // The first import of a fresh data dir comes before the jar is ever written.
+      mkdirSync(dirname(markerFile()), { recursive: true });
+      writeFileSync(markerFile(), `${mark}\n`, { mode: 0o600 });
+    } catch (error) {
+      logger.error('Failed to write the import marker', { error: String(error) });
+    }
+    this.importMark = mark;
+    this.generation += 1;
+  }
+
+  /** Changes on each explicit import, so the browser knows to take the new cookies. */
   jarGeneration(): number {
     this.ensureLoaded();
     return this.generation;
@@ -178,6 +228,7 @@ export class SessionService {
   /** Replace every stored cookie with `input`, and persist. Returns how many were stored. */
   replaceCookies(input: string): number {
     this.ensureLoaded();
+    this.markImported();
     this.jar = new CookieJar();
     return this.importCookies(input);
   }

@@ -35,6 +35,10 @@ const USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36';
 
 const NAV_TIMEOUT_MS = parseInt(process.env.CARREFOUR_NAV_TIMEOUT_MS || '60000', 10);
+/** Minimum delay between two copies of the browser's cookies to the jar. */
+const WRITE_BACK_INTERVAL_MS = 60_000;
+const CARREFOUR_HOSTS = /(^|\.)carrefour\.fr$/;
+
 
 /**
  * Where to park a page per origin. The root of the IAM host answers with
@@ -422,8 +426,15 @@ class BrowserService {
       return result as FetchResponse;
     };
 
+    const runAndKeep = async (): Promise<FetchResponse> => {
+      const response = await run();
+      // Only a session the site just accepted is worth keeping.
+      if (response.ok && CARREFOUR_HOSTS.test(new URL(request.url).hostname)) await this.writeBackCookies();
+      return response;
+    };
+
     try {
-      return await run();
+      return await runAndKeep();
     } catch (error) {
       // A navigation can tear down the execution context mid-call; re-park once.
       logger.info('In-page fetch failed, re-parking the page and retrying', {
@@ -433,7 +444,7 @@ class BrowserService {
       const stale = this.pages.get(origin);
       if (stale && !stale.isClosed()) await stale.close().catch(() => undefined);
       this.pages.delete(origin);
-      return run();
+      return runAndKeep();
     }
   }
 
@@ -444,6 +455,35 @@ class BrowserService {
     const response = await page.goto(url, { waitUntil: 'domcontentloaded' });
     await this.syncCookies();
     return { status: response?.status() ?? null, finalUrl: page.url() };
+  }
+
+  /** When the browser's cookies were last written back to the jar, and what they were. */
+  private lastWriteBack = 0;
+  private lastWriteBackSignature = '';
+
+  /**
+   * Carrefour renews its session cookies on ordinary API responses, which only
+   * the browser sees. Copy them to the jar (at most once a minute, and only
+   * when they changed), so a restarted server starts from the live session
+   * rather than from the cookies of the last import.
+   */
+  private async writeBackCookies(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastWriteBack < WRITE_BACK_INTERVAL_MS) return;
+    this.lastWriteBack = now;
+    try {
+      const context = await this.ensureContext();
+      const cookies = (await context.cookies()).filter((c) => CARREFOUR_HOSTS.test(c.domain.replace(/^\./, '')));
+      const signature = cookies
+        .map((c) => `${c.name}|${c.domain}|${c.path}|${c.value}|${Math.floor(c.expires)}`)
+        .sort()
+        .join('\n');
+      if (cookies.length === 0 || signature === this.lastWriteBackSignature) return;
+      this.lastWriteBackSignature = signature;
+      sessionService.importCookies(JSON.stringify(cookies));
+    } catch (error) {
+      logger.error('Could not write the browser cookies back to the jar', { error: String(error) });
+    }
   }
 
   /** Mirror the browser's cookies back into the jar so status/refresh can read them. */
