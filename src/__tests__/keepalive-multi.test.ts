@@ -77,6 +77,12 @@ test('private profiles of dead processes are swept, live ones kept', () => {
   }
 });
 
+/** The lock line a server writes; no start time where /proc is missing (macOS, Windows). */
+function lockLine(pid: number): string {
+  const start = processStartTime(pid);
+  return start ? `${hostname()} ${pid} ${start}` : `${hostname()} ${pid}`;
+}
+
 // --- One keep-alive per data dir --------------------------------------------
 
 test('the first server takes the keep-alive lead, a second one skips', () => {
@@ -85,7 +91,7 @@ test('the first server takes the keep-alive lead, a second one skips', () => {
     const file = join(root, 'keepalive.lock');
     assert.equal(claimKeepAliveLead(file, OTHER_LIVE_PID), true);
     assert.equal(claimKeepAliveLead(file, process.pid), false);
-    assert.equal(readFileSync(file, 'utf8').trim(), `${hostname()} ${OTHER_LIVE_PID} ${processStartTime(OTHER_LIVE_PID)}`);
+    assert.equal(readFileSync(file, 'utf8').trim(), lockLine(OTHER_LIVE_PID));
     assert.equal(claimKeepAliveLead(file, OTHER_LIVE_PID), true, 'the leader keeps it');
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -100,7 +106,7 @@ test('the lead of a dead process or another host is taken over', () => {
     assert.equal(claimKeepAliveLead(file), true);
     writeFileSync(file, `old-container ${OTHER_LIVE_PID}\n`);
     assert.equal(claimKeepAliveLead(file), true);
-    assert.equal(readFileSync(file, 'utf8').trim(), `${hostname()} ${process.pid} ${processStartTime(process.pid)}`);
+    assert.equal(readFileSync(file, 'utf8').trim(), lockLine(process.pid));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
