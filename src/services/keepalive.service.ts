@@ -148,12 +148,59 @@ export function leaderFile(): string {
 }
 
 /**
+ * Start time of a process, in clock ticks since boot (field 22 of
+ * /proc/<pid>/stat), or null where /proc is unavailable. Together with the pid
+ * it names one process: a pid reused after a restart gets a new start time.
+ */
+export function processStartTime(pid: number): string | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    // The command name (field 2) may hold spaces and parentheses: split after the last ')'.
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    return fields[19] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True unless `pid` is known to be a thread rather than a process. Linux
+ * answers `kill(tid, 0)` for any thread id too, so a lock naming a pid that
+ * now belongs to one of our own threads looked like a live leader.
+ */
+export function isThreadGroupLeader(pid: number): boolean {
+  try {
+    const match = /^Tgid:\s*(\d+)/m.exec(readFileSync(`/proc/${pid}/status`, 'utf8'));
+    return !match || Number(match[1]) === pid;
+  } catch {
+    return true; // no /proc: rely on processAlive alone
+  }
+}
+
+/** Is the holder named in a lock line still the process that wrote it? */
+export function liveLeader(line: string, pid: number = process.pid, host: string = hostname()): boolean {
+  const [holderHost, holderPid, holderStart] = line.trim().split(/\s+/);
+  const other = Number(holderPid);
+  if (holderHost !== host || !Number.isInteger(other) || other <= 0 || other === pid) return false;
+  if (!processAlive(other) || !isThreadGroupLeader(other)) return false;
+  // Locks written before the start time was recorded only have "<host> <pid>".
+  if (holderStart === undefined) return true;
+  const start = processStartTime(other);
+  return start === null || start === holderStart;
+}
+
+/**
  * Only one server per data dir runs the keep-alive. Several copies can share
  * it (Hermes starts one per agent session): without this, each of them
  * replayed the SSO chain and overwrote keepalive-state.json, and a copy that
  * could not start its browser recorded an error for a session that was fine.
- * The lead is "<host> <pid>" in keepalive.lock; a dead or foreign holder is
- * taken over, so the lead moves on when its process exits.
+ * The lead is "<host> <pid> <start time>" in keepalive.lock; a dead or foreign
+ * holder is taken over, so the lead moves on when its process exits.
+ *
+ * A container restart keeps its hostname but starts pids over, so the old
+ * lead's pid can come back as an unrelated process or as one of our own
+ * threads. The start time and the thread check tell those apart: before,
+ * such a lock made every server skip every tick, silently.
  */
 export function claimKeepAliveLead(
   file: string = leaderFile(),
@@ -161,14 +208,13 @@ export function claimKeepAliveLead(
   host: string = hostname()
 ): boolean {
   try {
-    const [holderHost, holderPid] = readFileSync(file, 'utf8').trim().split(/\s+/);
-    const other = Number(holderPid);
-    if (holderHost === host && Number.isInteger(other) && other !== pid && processAlive(other)) return false;
+    if (liveLeader(readFileSync(file, 'utf8'), pid, host)) return false;
   } catch {
     // no lead yet
   }
+  const start = processStartTime(pid);
   try {
-    writeFileSync(file, `${host} ${pid}\n`);
+    writeFileSync(file, `${host} ${pid}${start ? ` ${start}` : ''}\n`);
   } catch (error) {
     logger.error('Failed to write the keep-alive lead', { error: String(error) });
   }
